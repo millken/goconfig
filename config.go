@@ -29,16 +29,6 @@ func LoadWithDefault[T any](t *T, opts ...Option) (*T, error) {
 	for _, optFn := range opts {
 		optFn(opt)
 	}
-	parseConfig := func(path string) error {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return errors.Wrap(err, "failed to read config content")
-		}
-		if err = yaml.Unmarshal(body, cfg); err != nil {
-			return errors.Wrap(err, "failed to unmarshal config to struct")
-		}
-		return nil
-	}
 	//load from default config file
 	if opt.path == "" {
 		for _, configDir := range opt.dirs {
@@ -56,8 +46,12 @@ func LoadWithDefault[T any](t *T, opts ...Option) (*T, error) {
 		}
 	}
 	if opt.path != "" {
-		if err := parseConfig(opt.path); err != nil {
-			return nil, err
+		body, err := os.ReadFile(opt.path)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to read config content")
+		}
+		if err = yaml.Unmarshal(body, cfg); err != nil {
+			return nil, errors.Wrap(err, "failed to unmarshal config to struct")
 		}
 	}
 
