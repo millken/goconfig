@@ -2,64 +2,108 @@ package goconfig
 
 import (
 	"context"
-	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/imdario/mergo"
+	"dario.cat/mergo"
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
 	"github.com/sethvargo/go-envconfig"
 	"gopkg.in/yaml.v2"
 )
 
-//LoadConfigFromEnv loaded config from environment variables, override default config
-func LoadConfigFromEnv(defaultConfig, envConfig interface{}) error {
+// Option config option
+type Option func(*option)
 
+type option struct {
+	path  string   //config file path
+	files []string //config file names
+	dirs  []string //config file dirs
+}
+
+// LoadWithDefault load config from file and env, if config file not exist, use default config
+func LoadWithDefault[T any](t *T, opts ...Option) (*T, error) {
+	var cfg = t
+	var opt = new(option)
+	for _, optFn := range opts {
+		optFn(opt)
+	}
+	parseConfig := func(path string) error {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return errors.Wrap(err, "failed to read config content")
+		}
+		if err = yaml.Unmarshal(body, cfg); err != nil {
+			return errors.Wrap(err, "failed to unmarshal config to struct")
+		}
+		return nil
+	}
+	//load from default config file
+	if opt.path == "" {
+		for _, configDir := range opt.dirs {
+			for _, configFile := range opt.files {
+				dirPath, err := homedir.Expand(configDir)
+				if err != nil {
+					continue
+				}
+				path := filepath.Join(dirPath, configFile)
+				if ok, _ := FileExists(path); ok {
+					opt.path = path
+					break
+				}
+			}
+		}
+	}
+	if opt.path != "" {
+		if err := parseConfig(opt.path); err != nil {
+			return nil, err
+		}
+	}
+
+	//load from env
+	var envConfig = new(T)
 	if err := envconfig.Process(context.Background(), envConfig); err != nil {
-		return errors.Wrap(err, "failed to process envconfig to struct")
+		return nil, errors.Wrap(err, "failed to process envconfig to struct")
 	}
-
-	if err := mergo.Merge(defaultConfig, envConfig, mergo.WithOverride); err != nil {
-		return errors.Wrap(err, "failed to merge config")
+	if err := mergo.Merge(cfg, envConfig, mergo.WithOverride); err != nil {
+		return nil, errors.Wrap(err, "failed to merge config")
 	}
-	return nil
+	return cfg, nil
 }
 
-func LoadConfigFromFile(path string, defaultConfig, envConfig interface{}) error {
-	body, err := ioutil.ReadFile(path)
-	if err != nil {
-		return errors.Wrap(err, "failed to read config content")
+// WithFile set config file path
+func WithFile(path string) Option {
+	return func(opt *option) {
+		opt.path = path
 	}
-	if err = yaml.Unmarshal(body, defaultConfig); err != nil {
-		return errors.Wrap(err, "failed to unmarshal config to struct")
-	}
-
-	return LoadConfigFromEnv(defaultConfig, envConfig)
 }
 
-var (
-	defaultConfigFiles []string
-	defaultConfigDirs  []string
-)
+// Load config from file and env
+func Load[T any](opts ...Option) (*T, error) {
+	var cfg = new(T)
+	return LoadWithDefault(cfg, opts...)
+}
 
 // File names from which we attempt to read configuration.
-func SetDefaultConfigFiles(files ...string) {
-	defaultConfigFiles = files
+func SetDefaultConfigFiles(files ...string) Option {
+	return func(opt *option) {
+		opt.files = files
+	}
 }
 
 // Launchd doesn't set root env variables, so there is default
-func SetDefaultConfigDirs(dirs ...string) {
-	defaultConfigDirs = dirs
+func SetDefaultConfigDirs(dirs ...string) Option {
+	return func(opt *option) {
+		opt.dirs = dirs
+	}
 }
 
-//GetCurrentDirectory return current directory
+// GetCurrentDirectory return current directory
 func GetCurrentDirectory() string {
 	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
-		log.Fatal(err)
+		return ""
 	}
 	return strings.Replace(dir, "\\", "/", -1)
 }
@@ -76,23 +120,4 @@ func FileExists(path string) (bool, error) {
 	}
 	f.Close()
 	return true, nil
-}
-
-// FindDefaultConfigPath returns the first path that contains a config file.
-// If none of the combination of DefaultConfigDirs and DefaultConfigFiles
-// contains a config file, return empty string.
-func FindDefaultConfigPath() string {
-	for _, configDir := range defaultConfigDirs {
-		for _, configFile := range defaultConfigFiles {
-			dirPath, err := homedir.Expand(configDir)
-			if err != nil {
-				continue
-			}
-			path := filepath.Join(dirPath, configFile)
-			if ok, _ := FileExists(path); ok {
-				return path
-			}
-		}
-	}
-	return ""
 }
